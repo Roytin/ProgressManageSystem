@@ -1,0 +1,241 @@
+﻿@using Dapper
+@{
+    Page.UserInfo = Session["UserInfo"] as UserInfo;
+
+    if (Page.UserInfo == null)
+    {
+        Response.Redirect("./login.cshtml");
+    }
+
+    string strNodeConfigId = Request["nc"];
+    NodeConfig nodeConfig = null;
+    string strModelId = Request["m"];
+    ModelInfo curModelInfo = null;
+    var cookieVersion = Request.Cookies["vc"];
+
+    int versionId = Manager.VersionConfigs.First().Id;
+    if (cookieVersion != null)
+    {
+        int id;
+        if (int.TryParse(cookieVersion.Value, out id))
+        {
+            if (Manager.VersionConfigs.Any(x => x.Id == id))
+            {
+                versionId = id;
+            }
+        }
+    }
+    
+    List<NodeInfo> nodes = null;
+    if (!string.IsNullOrEmpty(strNodeConfigId))
+    {
+        nodeConfig = Manager.NodeConfigs.First(x => x.Id == strNodeConfigId);
+        nodes = Manager.Data.Query<NodeInfo>("select * from data_nodes where ConfigId=@ConfigId and State!=3 and VersionId=@VersionId;",
+            new { ConfigId = strNodeConfigId, VersionId = versionId }) as List<NodeInfo>;
+        nodes.Sort((a, b) => b.State.CompareTo(a.State));
+    }
+    if (strModelId != null)
+    {
+        curModelInfo = Manager.Data.Query<ModelInfo>("select * from data_models WHERE Id=@ModelId", new {ModelId = strModelId}).First();
+        Session["ModelInfo"] = curModelInfo;
+    }
+    else
+    {
+        Session.Remove("ModelInfo");
+    }
+    //string url = Request.Url.AbsoluteUri;
+}
+<!DOCTYPE html>
+<html>
+<head>
+    <title>PMS - @Page.Title</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <script src="~/Scripts/jquery-2.1.3.min.js"></script>
+    <link href="~/css/bootstrap.min.css" rel="stylesheet" />
+    <link href="~/css/dashboard.css" rel="stylesheet" />
+    <script src="~/js/bootstrap.min.js"></script>
+    <script src="~/Scripts/autoLogin.js"></script>
+    <style>
+        .border {
+            border-style: solid;
+            border-width: 1px;
+            border-color: gainsboro;
+            padding: 8px
+        }
+        .tableft {
+            padding-left: 20px;
+        }
+        a {
+            font-size: smaller;
+        }
+    </style>
+    @RenderSection("head", required: false)
+</head>
+<body>
+<!--导航条-->
+    <script>
+        function setCookieVersion(versionId) {
+            setCookie("vc", versionId);
+            location.reload();
+        }
+    </script>
+<nav class="navbar navbar-inverse navbar-fixed-top">
+    <div class="container">
+        <div class="navbar-header">
+            <button type="button" class="navbar-toggle collapsed" data-toggle="collapse" data-target="#navbar" aria-expanded="false" aria-controls="navbar">
+                <span class="sr-only">Toggle navigation</span>
+                <span class="icon-bar"></span>
+                <span class="icon-bar"></span>
+                <span class="icon-bar"></span>
+            </button>
+            <a class="navbar-brand" href="./home.cshtml" style="color:white">永夜君王 - 流程管理系统</a>
+        </div>
+
+        <div id="navbar" class="navbar-collapse collapse">
+            <ul class="nav navbar-nav navbar-right">
+                <li class="active"><a><span class="glyphicon glyphicon-user" aria-hidden="true"></span>欢迎你, @Page.UserInfo.NickName</a>
+                </li>
+                <li>
+                    <a href="./Tools/NotifyTool.zip">下载提醒器</a>
+                </li>
+                <li>
+                    <a href="~/newModel.cshtml">新建功能</a>
+                </li>
+                <li class="dropdown">
+                    <a href="#" class="dropdown-toggle" data-toggle="dropdown" role="button" aria-expanded="false">
+                        @Manager.VersionConfigs.First(x => x.Id == versionId).Name <span class="caret"></span>
+                    </a>
+                    <ul class="dropdown-menu" role="menu">
+                        @foreach (VersionConfig vc in Manager.VersionConfigs)
+                        {
+                            <li><a tabindex="-1" href="#" onclick=" setCookieVersion('@vc.Id'); "> @vc.Name </a></li>
+                        }
+                    </ul>
+                </li>
+                <li>
+                    <a href="./login.cshtml?cl=1" class="danger">退出</a>
+                </li>
+            </ul>
+        </div>
+    </div>
+</nav>
+
+<div class="container-fluid">
+    <div class="row">
+        <!--1级菜单-->
+        <div class="col-xs-1" style="padding: 0">
+            <div class="list-group">
+                @foreach (var nc in Manager.NodeConfigs)
+                {
+                    var nodesWaiting = Manager.Data.Query<NodeInfo>("select * from data_nodes where `State`=@State and `ConfigId`=@ConfigId and `VersionId`=@VersionId", new { State = NodeState.审核中, ConfigId = nc.Id, VersionId = versionId });
+                    var nodesWaitingForMe = nodesWaiting.Where(x => x.JudgeInfos.Any(inf => inf.JudgerId == Page.UserInfo.Id && inf.JudgeResult == JudgeResult.未审核)).ToList();
+                    string highlight = "";
+                    if (nodeConfig != null && nodeConfig.Id == nc.Id)
+                    {
+                        highlight = "active";
+                    }
+                    <a href="./home.cshtml?nc=@nc.Id" class="list-group-item @highlight" style="font-size:smaller">
+                        @if (nodesWaitingForMe.Count != 0)
+                        {
+                            <span class="badge" style="color: white; background: red">@nodesWaitingForMe.Count</span>
+                        }
+                        @nc.Name
+                    </a>
+                }
+            </div>
+        </div>
+
+        <!--2级菜单-->
+        <div class="col-xs-2" style="padding: 0">
+            <ul class="list-group">
+                @if (nodes != null)
+                {
+                    var 进行中 = nodes.Where(x => x.NodeState == NodeState.进行中).ToList();
+                    var 审核中 = nodes.Where(x => x.NodeState == NodeState.审核中).ToList();
+                    var 没开始 = nodes.Where(x => x.NodeState == NodeState.没开始).ToList();
+                    //var 已审核 = nodes.Where(x => x.NodeState == NodeState.已审核).ToList();
+                    <li class="list-group-item">
+                        <strong style="color: tomato">
+                            进行中
+                        </strong>
+                        <div class="list-group tableft">
+                            @foreach (var node in 进行中)
+                            {
+                                string highl = string.Empty;
+                                if (curModelInfo != null && curModelInfo.Id == node.ModelId)
+                                {
+                                    highl = "active";
+                                }
+                                var modelInfo = Manager.Data.Query<ModelInfo>("select * from data_models WHERE Id=@ModelId and VersionId=@VersionId", node).First();
+                                <a href="./detal.cshtml?nc=@strNodeConfigId&n=@node.Id&m=@modelInfo.Id" class="list-group-item @highl" style="font-size:smaller">
+                                    <span class="glyphicon glyphicon-edit" aria-hidden="true"></span>
+                                    @modelInfo.Name
+                                </a>
+                            }
+                        </div>
+                    </li>
+                    <li class="list-group-item">
+                        <strong style="color: red">审核中</strong>
+                        <div class="list-group tableft">
+                            @foreach (var node in 审核中)
+                            {
+                                string highl = string.Empty;
+                                if (curModelInfo != null && curModelInfo.Id == node.ModelId)
+                                {
+                                    highl = "active";
+                                }
+                                var modelInfo = Manager.Data.Query<ModelInfo>("select * from data_models WHERE Id=@ModelId", node).First();
+                                <a href="./detal.cshtml?nc=@strNodeConfigId&n=@node.Id&m=@modelInfo.Id" class="list-group-item @highl">
+                                    @if (node.JudgeInfos.Any(x => x.JudgeResult != JudgeResult.审核通过 && x.JudgerId == Page.UserInfo.Id))
+                                    {
+                                        <span class="glyphicon glyphicon glyphicon glyphicon-unchecked" aria-hidden="true"></span>
+                                        @*<span class="badge" style="background: red;color:white">1</span>*@
+                                        @*<small style="color: red;" title="正在等待您审核的环节个数">待审</small>*@
+                                    }
+                                    else
+                                    {
+                                        <span class="glyphicon glyphicon-check" aria-hidden="true"></span>
+                                    }
+                                    @modelInfo.Name
+                                </a>
+                            }
+                        </div>
+
+                    </li>
+                    <li class="list-group-item">
+                        <strong style="color: grey">没开始</strong>
+                        <div class="list-group tableft">
+                            @foreach (var node in 没开始)
+                            {
+                                string highl = string.Empty;
+                                if (curModelInfo != null && curModelInfo.Id == node.ModelId)
+                                {
+                                    highl = "active";
+                                }
+                                var modelInfo = Manager.Data.Query<ModelInfo>("select * from data_models WHERE Id=@ModelId", node).First();
+                                <a href="./detal.cshtml?nc=@strNodeConfigId&n=@node.Id&m=@modelInfo.Id" class="list-group-item @highl">
+                                    <span class="glyphicon glyphicon-ban-circle" aria-hidden="true"></span>
+                                    @modelInfo.Name
+                                </a>
+                            }
+                        </div>
+                    </li>
+                }
+            </ul>
+        </div>
+        <div class="col-xs-9 main" style="min-height: 600px">
+            @RenderBody()
+        </div>
+    </div>
+</div>
+@*<div class="modal-footer">
+    <small style="color: red">yǒu bug zhǎo chén róng</small><br/>
+    <label>Developed by 陈容</label>
+</div>*@
+    <footer class="modal-footer main">
+        <small style="color: red">yǒu BUG zhǎo chén róng</small><br />
+        <label>Developed by 陈容</label>
+    </footer>
+</body>
+</html>

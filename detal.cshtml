@@ -1,0 +1,480 @@
+﻿@using Dapper
+@{
+    Page.Title = "查询";
+    Layout = "_Layout.cshtml";
+    Page.UserInfo = UserInfo.CheckLogin(Request, Response, Session);
+    if (Page.UserInfo == null)
+    {
+        Response.Redirect("./login.cshtml");
+    }
+
+    string strModelId = Request["m"];
+    ModelInfo curModelInfo = null;
+    if (strModelId != null)
+    {
+        curModelInfo = Manager.Data.Query<ModelInfo>("select * from data_models WHERE Id=@ModelId", new { ModelId = strModelId }).First();
+    }
+
+    /*对临时配置更改的调整适应(如审核人改变)*/
+    string strNodeId = Request["n"];
+    if (strNodeId == null)
+    {
+        Response.Redirect("./home.cshtml");
+        return;
+    }
+
+    var cookieVersion = Request.Cookies["vc"];
+
+    int versionId = Manager.VersionConfigs.First().Id;
+    if (cookieVersion != null)
+    {
+        int id;
+        if (int.TryParse(cookieVersion.Value, out id))
+        {
+            if (Manager.VersionConfigs.Any(x => x.Id == id))
+            {
+                versionId = id;
+            }
+        }
+    }
+    var paramNode = new
+    {
+        NodeId = strNodeId,
+        VersionId = versionId
+    };
+    NodeInfo nodeInfo = Manager.Data.Query<NodeInfo>("select * from data_nodes where Id=@NodeId and VersionId=@VersionId", paramNode).FirstOrDefault();
+    if (nodeInfo != null && nodeInfo.NodeState!= NodeState.没开始 && nodeInfo.NodeState!= NodeState.已审核)
+    {
+        bool ispassed = true;
+        foreach (var uid in nodeInfo.Config.JudgerNames.Select(x => Manager.AllUserInfos.First(u => u.UserName == x).Id))
+        {
+            if (nodeInfo.JudgeInfos.Any(x => x.JudgerId == uid && x.JudgeResult == JudgeResult.审核通过))
+            {
+                continue;
+            }
+            else
+            {
+                ispassed = false;
+                break;
+            }
+        }
+        if (ispassed) //JudgeInfos.All(x => x.JudgeResult == JudgeResult.审核通过)))
+        {
+            nodeInfo.NodeState = NodeState.已审核;
+            Manager.Data.Execute("UPDATE data_nodes SET `State`=@State,`JudgeInfo`=@JudgeInfo WHERE `Id`=@Id", nodeInfo);
+            TryLevelup(nodeInfo);
+            Response.Write("<script language=javascript>window.location.href=document.URL; </script>");
+            return;
+        }
+    }
+    
+    //string strVersion = Request["vc"] ?? Manager.VersionConfigs.First().Id.ToString();
+    if (IsPost)
+    {
+        NodeInfo curNodeInfo = Session["NodeInfo"] as NodeInfo;
+        if (curNodeInfo == null)
+        {
+            Response.Write("error!");
+            return;
+        }
+        
+        if (Request["isJudge"] == "true")
+        {
+            bool pass = bool.Parse(Request["pass"]);
+            var myJudge = curNodeInfo.JudgeInfos.FirstOrDefault(x => x.JudgerId == Page.UserInfo.Id);
+            if (myJudge == null)
+            {
+                myJudge = new JudgeInfo(){JudgerId = Page.UserInfo.Id, JudgeResult = JudgeResult.未审核};
+                curNodeInfo.JudgeInfos.Add(myJudge);
+            }
+
+            if (pass)
+            {
+                if (myJudge.JudgeResult != JudgeResult.审核通过)
+                {
+                    myJudge.JudgeResult = JudgeResult.审核通过;
+                    if (curNodeInfo.JudgeInfos.All(x => x.JudgeResult == JudgeResult.审核通过))
+                    {
+                        curNodeInfo.NodeState = NodeState.已审核;
+                    }
+                    curNodeInfo.JudgeInfo = Json.Encode(curNodeInfo.JudgeInfos);
+                    //更新数据库
+                    Manager.Data.Execute("UPDATE data_nodes SET `State`=@State,`JudgeInfo`=@JudgeInfo WHERE `Id`=@Id", curNodeInfo);
+
+                    LogInfo.Log(new LogInfo(LogBehavior.审核通过, Request, curNodeInfo.Config.Name, curModelInfo.Name, Page.UserInfo.NickName, curNodeInfo.JudgeInfo));
+                }
+            }
+            else
+            {
+                //一个为通过就算失败,状态回归进行中
+                foreach (JudgeInfo jif in curNodeInfo.JudgeInfos)
+                {
+                    jif.JudgeResult = JudgeResult.未审核;
+                }
+                myJudge.JudgeResult = JudgeResult.审核未通过;
+                curNodeInfo.NodeState = NodeState.进行中;
+
+                curNodeInfo.JudgeInfo = Json.Encode(curNodeInfo.JudgeInfos);
+                //更新数据库
+                Manager.Data.Execute("UPDATE data_nodes SET `State`=@State,`JudgeInfo`=@JudgeInfo WHERE `Id`=@Id", curNodeInfo);
+                
+                LogInfo.Log(new LogInfo(LogBehavior.审核驳回, Request, curNodeInfo.Config.Name, curModelInfo.Name, Page.UserInfo.NickName, curNodeInfo.JudgeInfo));
+            }
+            
+            TryLevelup(curNodeInfo);
+        }
+        else if (Request["isToJudge"] == "true")
+        {
+            var listJudgers = new List<JudgeInfo>();
+            foreach (string judgerName in curNodeInfo.Config.JudgerNames)
+            {
+                int id = Manager.AllUserInfos.First(x => x.UserName == judgerName).Id;
+                listJudgers.Add(new JudgeInfo() { JudgeResult = JudgeResult.未审核, JudgerId = id });
+            }
+            //设置当前node的状态为审核中
+            curNodeInfo.NodeState = NodeState.审核中;
+            curNodeInfo.JudgeInfos = listJudgers;
+            Manager.Data.Execute("UPDATE data_nodes SET `State`=@State,`JudgeInfo`=@JudgeInfo WHERE `Id`=@Id", curNodeInfo);
+
+            LogInfo.Log(new LogInfo(LogBehavior.提交审核, Request, curNodeInfo.Config.Name, curModelInfo.Name, Page.UserInfo.NickName));
+        }
+        else if (Request["cmd"] == "edit")
+        {
+            string itemDetail = Request["itemDetail"];
+            string itemId = Request["itemId"];
+            //string itemNodeId = Request["itemDetail"];
+            if (itemDetail == null || itemId == null)
+            {
+                Response.Redirect("./error.cshtml");
+                return;
+            }
+            
+            var oldItem = Manager.Data.Query<ItemInfo>("select * from data_items where Id=@Id", new{Id=itemId}).FirstOrDefault();
+            if (oldItem == null)
+            {
+                Response.Redirect("./error.cshtml");
+                return;
+            }
+            
+            oldItem.ProviderId = Page.UserInfo.Id;
+            string oldDetail = oldItem.Detail;
+            oldItem.Detail = itemDetail;
+            oldItem.ProvideTime = DateTime.Now;
+            Manager.Data.Execute("UPDATE data_items SET `ProviderId`=@ProviderId,`ProvideTime`=@ProvideTime,`Detail`=@Detail " +
+                                 "WHERE Id=@Id", oldItem);
+
+            LogInfo.Log(new LogInfo(LogBehavior.修改成果, Request, curNodeInfo.Config.Name, curModelInfo.Name, Page.UserInfo.NickName,
+                "成果名: "+oldItem.Config.Name+", 旧URL: " + oldDetail + ", 新URL: " + itemDetail));
+        }
+        else
+        {
+            //保存成果
+            foreach (var itemConfig in curNodeInfo.Config.ManifestItems)
+            {
+                string itemDetail = Request[itemConfig.Id];
+                if (itemDetail == null)
+                {
+                    continue;
+                }
+                ItemInfo itemInfo = new ItemInfo(curNodeInfo.Id, itemConfig.Id, Page.UserInfo.Id,
+                    itemDetail);
+                var oldItem = Manager.Data.Query<ItemInfo>("select * from data_items where NodeId=@NodeId and ConfigId=@ConfigId", itemInfo).FirstOrDefault();
+                if (oldItem == null)
+                {
+                    Manager.Data.Execute("INSERT INTO data_items(`NodeId`,`ConfigId`,`ProviderId`,`ProvideTime`,`Detail`) " +
+                                         "VALUE(@NodeId,@ConfigId,@ProviderId,@ProvideTime,@Detail)", itemInfo);
+
+                    LogInfo.Log(new LogInfo(LogBehavior.保存成果, Request, curNodeInfo.Config.Name, curModelInfo.Name, Page.UserInfo.NickName,
+                        "成果名: " + itemConfig.Name + ", 地址: " + itemDetail));
+                }
+                else
+                {
+                    oldItem.ProviderId = itemInfo.ProviderId;
+                    string oldDetail = oldItem.Detail;
+                    oldItem.Detail = itemInfo.Detail;
+                    oldItem.ProvideTime = DateTime.Now;
+                    Manager.Data.Execute("UPDATE data_items SET `ProviderId`=@ProviderId,`ProvideTime`=@ProvideTime,`Detail`=@Detail " +
+                                         "WHERE Id=@Id", oldItem);
+
+                    LogInfo.Log(new LogInfo(LogBehavior.修改成果, Request, curNodeInfo.Config.Name, curModelInfo.Name, Page.UserInfo.NickName,
+                        "成果名: " + itemConfig.Name + ", 旧URL: " + oldDetail + ", 新URL: " + itemDetail));
+                }
+            }
+        }
+        Response.Write( "<script language=javascript>window.location.href=document.URL; </script>" ); 
+        //Response.Redirect(Request.Url.ToString());
+    }
+        
+    Session["NodeInfo"] = null;
+    
+    //解析审核状态
+    if (nodeInfo == null)
+    {
+        Response.Redirect("./home.cshtml?nc="+(Request["nc"]??""));
+    }
+    Session["NodeInfo"] = nodeInfo;
+    
+    //解析交付物
+    IEnumerable<ItemInfo> itemInfos = Manager.Data.Query<ItemInfo>("select * from data_items where NodeId=@NodeId", paramNode);
+    
+    string hrefLogPage = string.Format("./logInfo.cshtml?nc={0}&m={1}&n={2}&mname={3}&nname={4}",nodeInfo.ConfigId,strModelId,strNodeId,curModelInfo.Name, nodeInfo.Config.Name);
+}
+
+
+@functions{
+    void TryLevelup(NodeInfo curNodeInfo)
+    {
+        if (curNodeInfo.NodeState == NodeState.已审核)
+        {
+            var childrenIds = curNodeInfo.Config.ChildrenNodes.Select(x => x.Id).ToList();
+            if (childrenIds.Count == 0)
+            {
+                //整个系统功能完成
+                Response.Write("<strong style='color:red;'>整个功能模块杀青啦! </strong>");
+            }
+            else
+            {
+                //检查子环节是否可以开启
+                var childrenNodes = Manager.Data.Query<NodeInfo>("select * from data_nodes where `ModelId`=@ModelId and `ConfigId` in @ChildrenIds", new
+                {
+                    ModelId = curNodeInfo.ModelId,
+                    ChildrenIds = childrenIds
+                });
+                foreach (NodeInfo child in childrenNodes)
+                {
+                    var parents = Manager.Data.Query<NodeInfo>("select * from data_nodes where `ModelId`=@ModelId and `ConfigId` in @ParentIds", new
+                    {
+                        ModelId = child.ModelId,
+                        ParentIds = child.Config.ParentNodes.Select(x => x.Id).ToList()
+                    });
+                    if (parents.All(x => x.NodeState == NodeState.已审核))
+                    {
+                        child.NodeState = NodeState.进行中;
+                        Manager.Data.Execute("UPDATE data_nodes SET `State`=@State WHERE `Id`=@Id", child);
+                    }
+                }
+            }
+        }
+    }
+}
+<div class="row">
+    <!--详情-->
+    <dl>
+        <dt>功能名<a class="btn btn-info" style="float:right" href="@hrefLogPage">操作记录</a>
+        </dt>
+        <dd>@curModelInfo.Name <small style="color: red;"> (@Manager.VersionConfigs.First(x => x.Id == curModelInfo.VersionId).Name) </small></dd>
+        <dt>描述</dt>
+        <dd>@curModelInfo.Description</dd>
+        <dt>当前各环节状态: </dt>
+        <dd>
+            <table>
+                @foreach (var nc in Manager.NodeConfigs)
+                {
+                    var node = Manager.Data.Query<NodeInfo>("select * from data_nodes where `ModelId`=@ModelId and `ConfigId`=@ConfigId",
+                        new
+                        {
+                            ModelId = curModelInfo.Id,
+                            ConfigId = nc.Id
+                        }).First();
+                    if (node.NodeState == NodeState.审核中 || node.NodeState == NodeState.进行中)
+                    {
+                        <tr><td>@nc.Name: </td><td>@node.NodeState</td></tr>
+                    }
+                }
+            </table>
+        </dd>
+    </dl>
+    <!--交付物清单-->
+    <strong>已保存成果清单</strong>
+    <div class="table-responsive">
+        <table class="table table-condensed table-bordered">
+            <thead>
+            <tr>
+                <th>名称</th>
+                <th>存放地址(URL)</th>
+                <th>提交人</th>
+                <th>交付时间</th>
+                <th></th>
+            </tr>
+            </thead>
+            <tbody>
+            @{
+                var nodes = Manager.Data.Query<NodeInfo>("select * from data_nodes where ModelId=@ModelId", nodeInfo);
+                var nodeIds = nodes
+                    .Select(x => x.Id)
+                    .ToList();
+                var items = Manager.Data.Query<ItemInfo>("select * from data_items where NodeId in @NodeIds", new
+                {
+                    NodeIds = nodeIds
+                });
+            }
+            @foreach (var item in items)
+            {
+                var node = nodes.First(x => x.Id == item.NodeId);
+                var provider = Manager.Data.Query<UserInfo>("select * from data_users where Id=@ProviderId", item).First();
+                <tr>
+                    <td> @item.Config.Name</td>
+                    <td>
+                        <a href="@item.Detail" target="_blank">@item.Detail</a>
+                    </td>
+                    <td> @provider.NickName</td>
+                    <td> @item.ProvideTime</td>
+                    <td>
+                        @*<a href="#myModal" role="button" data-toggle="modal" onclick=" onTableItemChange('@item.Config.Id', '@item.Config.Name', '@item.Detail', '@item.Id'); ">修改</a>*@
+                        <button type="button" class="btn btn-primary btn-xs" data-toggle="modal" data-target="#myModal" 
+                                onclick="ontableitemchange('@item.Config.Id','@item.Config.Name','@item.Detail','@item.Id');">修改</button>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+        </div>
+        <br />
+        <!--审核状态-->
+        @if (nodeInfo.NodeState != NodeState.进行中 && nodeInfo.NodeState != NodeState.没开始)
+        {
+            <div>
+                <strong>审核状态</strong>
+                @foreach (string j in nodeInfo.Config.JudgerNames)
+                {
+                    var judgerInfo = Manager.Data.Query<UserInfo>("select * from data_users where UserName=@UserName", new
+                    {
+                        UserName = j
+                    }).First();
+                    var judge = nodeInfo.JudgeInfos.FirstOrDefault(x => x.JudgerId == judgerInfo.Id);
+                    JudgeResult result = JudgeResult.未审核;
+                    if (judge != null)
+                    {
+                        result = judge.JudgeResult;
+                    }
+                    switch (result)
+                    {
+                        case JudgeResult.审核通过:
+                            <code style="background-color: green; color: black">@judgerInfo.NickName</code>
+                            break;
+                        case JudgeResult.审核未通过:
+                        <code style="background-color: red; color: black">@judgerInfo.NickName</code>
+                            break;
+                        case JudgeResult.未审核:
+                        <code style="background-color: yellow; color: black">@judgerInfo.NickName</code>
+                            break;
+                    }
+                }
+            </div>
+        }
+        <!--提交交付物-->
+        @if (nodeInfo.NodeState == NodeState.进行中)
+        {
+            <p class="bg-success">
+                <span class="glyphicon glyphicon-star" aria-hidden="true"></span>
+                任务进行中, 可以修改并保存成果
+            </p>
+            <form class="modal-form" method="POST">
+                    @foreach (ItemConfig itemConfig in nodeInfo.Config.ManifestItems)
+                    {
+                        var item = items.FirstOrDefault(x => x.ConfigId == itemConfig.Id);
+                        string detail = item == null ? "" : item.Detail;
+                        string inputid = "input-"+@itemConfig.Id;
+                        <div class="form-group">
+                            <label for="@inputid">@itemConfig.Name</label>
+                            <input class="form-control" type="text" id="@inputid" placeholder="成果存放地址(URL)" name="@itemConfig.Id" value="@detail">
+                        </div>
+                    }
+                <button type="submit" class="btn btn-danger">保存</button>
+            </form>
+
+    <p style="padding-top: 20px">
+        <p class="bg-success">
+            <span class="glyphicon glyphicon-star" aria-hidden="true"></span>成果全部保存完毕, 可以提交审核
+        </p>
+                <br />
+                审核人：
+                @foreach (var name in nodeInfo.Config.JudgerNames)
+                {
+                    var nickName = Manager.AllUserInfos.First(x => x.UserName == name);
+                    <code> @nickName.NickName </code>
+                }
+            </p>
+            <form method="POST">
+                <input type="hidden" name="isToJudge" value="true" />
+                <button type="submit" class="btn btn-danger">提交审核</button>
+            </form>
+        }
+
+        @{
+            bool canJudge = false;
+            if (nodeInfo.NodeState == NodeState.审核中)
+            {
+                var myJudge = nodeInfo.JudgeInfos.FirstOrDefault(x => x.JudgerId == Page.UserInfo.Id);
+                if (myJudge != null && myJudge.JudgeResult != JudgeResult.审核通过)
+                {
+                    canJudge = true;
+                }
+                else if (myJudge == null && nodeInfo.Config.JudgerNames.Any(name => name == Page.UserInfo.UserName))
+                {
+                    canJudge = true;
+                }
+            }
+        }
+
+        @if (canJudge)
+        {
+            <div class="row" style="margin:20px 0 0 0">
+                <form method="POST">
+                    <input type="hidden" name="isJudge" value="true" />
+                    <input type="hidden" name="pass" value="true" />
+                    <button type="submit" class="btn btn-danger">
+                        <span class="glyphicon glyphicon-ok" aria-hidden="true">审核通过</span>
+
+                    </button>
+                </form>
+                <br />
+                <form method="POST">
+                    <input type="hidden" name="isJudge" value="true" />
+                    <input type="hidden" name="pass" value="false" />
+                    <button type="submit" class="btn btn-danger">
+                        <span class="glyphicon glyphicon-remove" aria-hidden="true">不通过</span>
+                    </button>
+                </form>
+            </div>
+        }
+        
+    <!-- Modal -->
+    <div class="modal fade" id="myModal" tabindex="-1" role="dialog" aria-labelledby="myModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+                    <h4 class="modal-title" id="modelTitle">ItemName</h4>
+                </div>
+                    <form method="POST">
+                        <div class="modal-body">
+                            <p>
+                                <label>输入您想要修改的新地址:</label>
+                                <textarea id="modelBody" class="form-control" rows="5" type="text" placeholder="成果存放地址(URL)" name="itemDetail" value=""></textarea>
+                                <input id="modelItemId" type="hidden" name="itemId" value="" />
+                                <input id="modelItemConfigId" type="hidden" name="itemConfigId" value="" />
+                                <input type="hidden" name="cmd" value="edit" />
+                            </p>
+                        </div>
+                        <div class="modal-footer">
+                            <button class="btn" data-dismiss="modal" aria-hidden="true">关闭</button>
+                            <button type="submit" class="btn btn-primary">保存</button>
+                        </div>
+                    </form>
+            </div>
+        </div>
+    </div>
+    </div>
+<script>
+    function ontableitemchange(configId, name, detail, itemId) {
+        var e_title = document.getElementById('modelTitle');
+        e_title.innerText = name;
+        var e_body = document.getElementById('modelBody');
+        e_body.value = detail;
+        var e_configId = document.getElementById('modelItemConfigId');
+        e_configId.name = configId;
+        var hidden = document.getElementById('modelItemId');
+        hidden.value = itemId;
+    }
+</script>

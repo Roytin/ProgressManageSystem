@@ -1,0 +1,87 @@
+﻿@using Dapper
+@{
+    Page.Title = "操作记录";
+    Layout = "_Layout.cshtml";
+
+    const int lines =20;
+
+    long rowsCount = Manager.Data.Query("select Count(*) as Count from log_behavior;").First().Count;
+    int maxPageIndex = (int)rowsCount / lines;
+    
+    int page = 0;
+    int.TryParse(Request["p"], out page);
+    
+    string prePage = page==0?"":string.Format("./logInfo.cshtml?p={0}", page-1);
+    string nxtPage = page==maxPageIndex?"":string.Format("./logInfo.cshtml?p={0}", page+1);
+}
+<div>
+    <br/>
+    @{
+        string disA = ""; 
+        if (prePage == "")
+        {
+            disA = "disabled";
+        }
+        string disB= ""; 
+        if (nxtPage == "")
+        {
+            disB = "disabled";
+        }
+    }
+
+    @*<a class="btn btn-info @disA " href="@prePage">上一页</a>
+    <a class="btn btn-info @disB " style="margin-left: 20px" href="@nxtPage">下一页</a>
+
+    <strong>当前页: </strong>@page
+    <strong>最大页: </strong>@maxPageIndex*@
+    <br /> 
+    <br /> 
+    <table class="table table-bordered table-condensed">
+        <thead>
+        <tr>
+            <th>操作时间</th>
+            <th>用户</th>
+            <th>IP地址</th>
+            <th>行为</th>
+            <th>所属功能</th>
+            <th>所属环节</th>
+            @*<th>备注信息</th>*@
+        </tr>
+        </thead>
+        <tbody>
+        @{
+            string sql = "select * from log_behavior where 1 ";
+            string strModelName = Request["mname"] ?? "";
+            string strNodeName = Request["name"] ?? "";
+            if (strModelName != "")
+            {
+                sql += "and `ModelName`=@ModelName ";
+            }
+            if (strNodeName != "")
+            {
+                sql += "and `NodeName`=@NodeName ";
+            }
+            var rows = Manager.Data.Query<LogInfo>(sql+" order by LogTime", new//+"order by LogTime limit @FirstPage, @LastPage"
+            {
+                FirstPage = page*lines,
+                LastPage = (page + 1)*lines,
+                NodeName = strNodeName,
+                ModelName = strModelName,
+            });
+
+            foreach (LogInfo logInfo in rows)
+            {
+                <tr>
+                    <td>@logInfo.LogTime</td>
+                    <td>@logInfo.UserNickName</td>
+                    <td>@logInfo.IP</td>
+                    <td>@logInfo.Behavior</td>
+                    <td>@logInfo.ModelName</td>
+                    <td>@logInfo.NodeName</td>
+                    @*<td>@logInfo.Data</td>*@
+                </tr>
+            }
+        }
+        </tbody>
+    </table>
+</div>

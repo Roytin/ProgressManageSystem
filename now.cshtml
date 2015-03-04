@@ -1,0 +1,59 @@
+﻿@using System.Configuration
+@using System.Web.Configuration
+@using Dapper
+@using MySql.Data.MySqlClient
+@{
+    //连接数据库
+    var conn = new MySqlConnection(WebConfigurationManager.ConnectionStrings["ConfigDB"].ConnectionString);
+
+    var foos = conn.Query("select * from config_items;");
+
+}
+
+<!DOCTYPE html>
+<html>
+<head lang="zh-cn">
+    <meta http-equiv="content-type" content="text/html;charset=utf-8">
+    <title>工具集</title>
+    @* ReSharper disable once NativeTypePrototypeExtending *@
+    <script>
+    var dateServer = new Date('@DateTime.Now');
+    var dateClientStart = new Date();
+    function a() {
+        Date.prototype.Format = function (fmt) {
+            var o = {
+                "M+": this.getMonth() + 1, //月份
+                "d+": this.getDate(), //日
+                "h+": this.getHours(), //小时
+                "m+": this.getMinutes(), //分
+                "s+": this.getSeconds(), //秒
+                @*"q+": Math.floor((this.getMonth() + 3) / 3) //季度
+                //"S": this.getMilliseconds() //毫秒 *@
+            };
+            if (/(y+)/.test(fmt)) fmt = fmt.replace(RegExp.$1, (this.getFullYear() + "").substr(4 - RegExp.$1.length));
+            for (var k in o)
+                if (o.hasOwnProperty(k))if (new RegExp("(" + k + ")").test(fmt)) fmt = fmt.replace(RegExp.$1, (RegExp.$1.length == 1) ? (o[k]) : (("00" + o[k]).substr(("" + o[k]).length)));
+            return fmt;
+        }
+
+        document.getElementById("id-datetime").innerText = getDatetimeString(dateServer);
+        setInterval(tick, 1000);
+    }
+
+    function tick() {
+        var timeClientNow = new Date();
+        var timeDelta = (timeClientNow - dateClientStart);
+        timeClientNow.setTime(dateServer.getTime() + timeDelta);
+        document.getElementById("id-datetime").innerText = getDatetimeString(timeClientNow);
+    }
+
+    function getDatetimeString(d) {
+        return d.Format("yyyy-MM-dd hh:mm:ss");
+    }
+
+    </script>
+</head>
+<body onload="a();">
+    北京时间: <strong id="id-datetime"></strong>
+</body>
+</html>

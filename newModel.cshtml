@@ -1,0 +1,71 @@
+﻿@using Dapper
+@{
+    Page.Title = "新建功能";
+    Layout = "_Layout.cshtml";
+    Page.UserInfo = UserInfo.CheckLogin(Request,Response,Session);
+    if (Page.UserInfo == null)
+    {
+        Response.Redirect("./login.cshtml");
+    }
+    string Warning=string.Empty;
+    if (IsPost)
+    {
+        string name = Request["name"];
+        string description = Request["description"];
+        string strVersionId = Request["versionId"];
+
+        int versionId= Manager.VersionConfigs.First().Id;
+        if (strVersionId!=null)
+        {
+            int id;
+            if (int.TryParse(strVersionId, out id))
+            {
+                if (Manager.VersionConfigs.Any(x => x.Id == id))
+                {
+                    versionId = id;
+                }
+            }
+        }
+        
+        if (ModelInfo.CreateNew(versionId, Page.UserInfo.Id, name, description) == null)
+        {
+            Warning = "功能名重复, 该功能已存在! ";
+        }
+        else
+        {
+            LogInfo.Log(new LogInfo(LogBehavior.新建功能, Request, "", name, Page.UserInfo.NickName, description));
+            Response.Redirect("./home.cshtml");
+        }
+        Response.Redirect(Request.Url.AbsoluteUri);
+    }
+}
+<div class="row">
+    <h3>新建功能</h3>
+    <div class="col-xs-8">
+        <form method="POST">
+            <div class="form-group">
+                <label for="inputName">功能名</label>
+                <input type="text" id="inputName" placeholder="功能名" name="name" class="form-control">
+            </div>
+            <div class="form-group">
+                <label for="inputName">版本</label>
+                <select name="versionId" class="form-control">
+                    @foreach (VersionConfig vc in Manager.VersionConfigs)
+                    {
+                        <option value="@vc.Id"> @vc.Name </option>
+                    }
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="inputDescription">描述</label>
+                <textarea id="inputDescription" name="description" placeholder="描述" rows="6" cols="20" class="form-control"></textarea>
+            </div>
+            <div class="form-group">
+                <button type="submit" class="btn btn-danger">提交</button>
+            </div>
+        </form>
+        <p>
+            <label class="text-warning">@Warning</label>
+        </p>
+    </div>
+</div>
