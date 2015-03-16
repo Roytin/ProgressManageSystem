@@ -95,4 +95,5 @@ public enum NodeState
     进行中 = 1,
     审核中 = 2,
     已审核 = 3,
+    已完结 = 4,
 }

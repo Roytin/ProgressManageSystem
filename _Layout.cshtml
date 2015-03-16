@@ -1,4 +1,6 @@
-﻿@using Dapper
+﻿@using System.Collections.Generic
+@using System.Linq
+@using Dapper
 @{
     Page.UserInfo = Session["UserInfo"] as UserInfo;
 
@@ -25,14 +27,24 @@
             }
         }
     }
-    
+
     List<NodeInfo> nodes = null;
+    List<NodeInfo> nodesFinished = null;
     if (!string.IsNullOrEmpty(strNodeConfigId))
     {
-        nodeConfig = Manager.NodeConfigs.First(x => x.Id == strNodeConfigId);
-        nodes = Manager.Data.Query<NodeInfo>("select * from data_nodes where ConfigId=@ConfigId and State!=3 and VersionId=@VersionId;",
-            new { ConfigId = strNodeConfigId, VersionId = versionId }) as List<NodeInfo>;
-        nodes.Sort((a, b) => b.State.CompareTo(a.State));
+        if (strNodeConfigId == "finished")
+        {
+            nodesFinished = Manager.Data.Query<NodeInfo>("select * from data_nodes where State=@State and VersionId=@VersionId Group By ModelId;",
+                new { State = NodeState.已完结, VersionId = versionId }) as List<NodeInfo>;
+            
+        }
+        else
+        {
+            nodeConfig = Manager.NodeConfigs.First(x => x.Id == strNodeConfigId);
+            nodes = Manager.Data.Query<NodeInfo>("select * from data_nodes where ConfigId=@ConfigId and State!=3 and VersionId=@VersionId;",
+                new { ConfigId = strNodeConfigId, VersionId = versionId }) as List<NodeInfo>;
+            nodes.Sort((a, b) => b.State.CompareTo(a.State));
+        }
     }
     if (strModelId != null)
     {
@@ -143,6 +155,15 @@
                         @nc.Name
                     </a>
                 }
+
+                @{
+                    string isfinishedPage = "";
+                    if (nodesFinished!=null)
+                    {
+                        isfinishedPage = "active";
+                    }
+                }
+                <a href="./home.cshtml?nc=finished" class="list-group-item @isfinishedPage" style="font-size:smaller">完结的功能</a>
             </div>
         </div>
 
@@ -201,7 +222,6 @@
                                 </a>
                             }
                         </div>
-
                     </li>
                     <li class="list-group-item">
                         <strong style="color: grey">没开始</strong>
@@ -222,9 +242,30 @@
                         </div>
                     </li>
                 }
+                @if (nodesFinished != null)
+                {
+                    <li class="list-group-item">
+                        <strong style="color: grey">已完结</strong>
+                        <div class="list-group tableft">
+                            @foreach (var node in nodesFinished)
+                            {
+                                string highl = string.Empty;
+                                if (curModelInfo != null && curModelInfo.Id == node.ModelId)
+                                {
+                                    highl = "active";
+                                }
+                                var modelInfo = Manager.Data.Query<ModelInfo>("select * from data_models WHERE Id=@ModelId", node).First();
+                                <a href="./detal.cshtml?nc=@strNodeConfigId&n=@node.Id&m=@modelInfo.Id" class="list-group-item @highl">
+                                    <span class="glyphicon glyphicon-ban-circle" aria-hidden="true"></span>
+                                    @modelInfo.Name
+                                </a>
+                            }
+                        </div>
+                    </li>
+                }
             </ul>
         </div>
-        <div class="col-xs-9 main" style="min-height: 600px">
+        <div class="col-xs-9 main" style="min-height: 640px">
             @RenderBody()
         </div>
     </div>
@@ -233,9 +274,10 @@
     <small style="color: red">yǒu bug zhǎo chén róng</small><br/>
     <label>Developed by 陈容</label>
 </div>*@
-    <footer class="modal-footer main">
-        <small style="color: red">yǒu BUG zhǎo chén róng</small><br />
-        <label>Developed by 陈容</label>
-    </footer>
+<footer class="modal-footer main">
+    <small style="color: red">yǒu BUG zhǎo chén róng</small><br/>
+    <label>Developed by 陈容</label>
+</footer>
+    @RenderSection("Script", false)
 </body>
 </html>

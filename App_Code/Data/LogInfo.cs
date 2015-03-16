@@ -50,4 +50,5 @@ public enum LogBehavior
     提交审核,
     审核通过,
     审核驳回,
+    跳过审核,
 }

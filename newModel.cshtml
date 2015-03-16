@@ -1,4 +1,5 @@
-﻿@using Dapper
+﻿@using System.Linq
+@using Dapper
 @{
     Page.Title = "新建功能";
     Layout = "_Layout.cshtml";
@@ -69,3 +70,8 @@
         </p>
     </div>
 </div>
+
+@section Script{
+    @*<link href="~/css/style.css" rel="stylesheet" />
+    <script src="~/js/script.js"></script>*@
+}
